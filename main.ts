@@ -2,22 +2,29 @@ import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Set
 
 // Remember to rename these classes and interfaces!
 
-interface MyPluginSettings {
-	mySetting: string;
+interface ReadsidianSettings {
+	goodReadsUserID: string;
+	bookshelf: string
 }
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: ReadsidianSettings = {
+	goodReadsUserID: '',
+	bookshelf: 'read'
 }
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export default class Readsidian extends Plugin {
+	settings: ReadsidianSettings;
 
 	async onload() {
+
 		await this.loadSettings();
 
+		this.addRibbonIcon('dice', 'Greet', () => {
+			new Notice('Hello, world!');
+		});
+
 		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
+		const ribbonIconEl = this.addRibbonIcon('book', 'Sample Plugin', (evt: MouseEvent) => {
 			// Called when the user clicks the icon.
 			new Notice('This is a notice!');
 		});
@@ -108,9 +115,9 @@ class SampleModal extends Modal {
 }
 
 class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
+	plugin: Readsidian;
 
-	constructor(app: App, plugin: MyPlugin) {
+	constructor(app: App, plugin: Readsidian) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
@@ -121,14 +128,26 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
+			.setName('GoodReads User ID')
+			.setDesc('Type your GoodReads user ID.')
 			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
+			.setPlaceholder('12356-your-user')
+			.setValue(this.plugin.settings.goodReadsUserID)
+			.onChange(async (value) => {
+				this.plugin.settings.goodReadsUserID = value;
+				await this.plugin.saveSettings();
+			}));
+
+			new Setting(containerEl)
+				.setName('Bookshelf')
+				.setDesc('GoodReads shelf to get the books from')
+				.addText(text => text
+					.setPlaceholder('read')
+				.setValue(this.plugin.settings.bookshelf)
 				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
+					this.plugin.settings.bookshelf = value;
 					await this.plugin.saveSettings();
 				}));
-	}
+				
+}
 }
