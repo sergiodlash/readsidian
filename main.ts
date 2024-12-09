@@ -1,16 +1,19 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { goodReadsParser } from './goodreads-rss-parser'
 
 // Remember to rename these classes and interfaces!
 
 interface ReadsidianSettings {
 	goodReadsUserID: string;
-	bookshelf: string
+	bookshelf: string;
+	readsidianDirectory : string;
 }
 
 const DEFAULT_SETTINGS: ReadsidianSettings = {
 	goodReadsUserID: '',
-	bookshelf: 'read'
-}
+	bookshelf: 'read',
+	readsidianDirectory: ''
+}	
 
 export default class Readsidian extends Plugin {
 	settings: ReadsidianSettings;
@@ -19,21 +22,10 @@ export default class Readsidian extends Plugin {
 
 		await this.loadSettings();
 
-		this.addRibbonIcon('dice', 'Greet', () => {
-			new Notice('Hello, world!');
-		});
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('book', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
+		const ribbonIconEl = this.addRibbonIcon('book', 'Readsidian', (evt: MouseEvent) => {
+			this.fetchBooks()
+		});	
+		ribbonIconEl.addClass('readsidian-ribbon-class');
 
 		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
@@ -77,12 +69,12 @@ export default class Readsidian extends Plugin {
 
 		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
 		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
-		});
+		//this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
+		//	console.log('click', evt);
+		//});
 
 		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		//this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
 	onunload() {
@@ -96,7 +88,59 @@ export default class Readsidian extends Plugin {
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
+
+	async fetchBooks(){
+
+		new Notice('Import from user ID: ' + this.settings.goodReadsUserID);
+		new Notice('Import from GoodReads shelf: ' + this.settings.bookshelf);
+
+		const url = 'https://www.goodreads.com/review/list_rss/'+ this.settings.goodReadsUserID + '?shelf='+this.settings.bookshelf;
+
+		const feed = await goodReadsParser.parseURL(url);
+
+		feed.items.forEach((item : any)=> {
+			console.log(item.book_id);
+
+			const properties = {
+				type : "goodReadsBook", 
+				bookID : item.book_id,
+				author : "\"[[" + item.author_name +"]]\""}
+			const title = item.title.replace(/[:\/\\]/g, ' '); // Replace illegal chars with blank
+			
+		  this.createCustomNote(title, properties, "Testing")
+
+		});
+
+	}
+
+	async createCustomNote(title : string , attributes : object, content : string) {
+			const fileName = `${title}.md`; // The note's title
+			const folderPath = this.settings.readsidianDirectory; // Specify a folder, or use "" for root
+			const filePath = `${folderPath}/${fileName}`;
+		
+			// Construct the note content with attributes in YAML front matter
+			const frontMatter = 
+`---
+${Object.entries(attributes)
+.map(([key, value]) => `${key}: ${value}`)
+.join("\n")}
+---
+
+${content}`;
+		
+			// Create the note
+			try {
+				await this.app.vault.create(filePath, frontMatter);
+				new Notice(`Note "${title}" created successfully!`);
+			} catch (error) {
+				console.error(`Error creating note "${title}`, error);
+				new Notice("Failed to create the note. Check the console for details.");
+			}
+		}
+
 }
+
+
 
 class SampleModal extends Modal {
 	constructor(app: App) {
@@ -148,6 +192,18 @@ class SampleSettingTab extends PluginSettingTab {
 					this.plugin.settings.bookshelf = value;
 					await this.plugin.saveSettings();
 				}));
+
+			new Setting(containerEl)
+				.setName('Notes directory')
+				.setDesc('In which directory in your vault should the book notes be created?')
+				.addText(text => text
+					.setPlaceholder('myBooks')
+				.setValue(this.plugin.settings.readsidianDirectory)
+				.onChange(async (value) => {
+					this.plugin.settings.readsidianDirectory = value;
+					await this.plugin.saveSettings();
+			}));
+
 				
 }
 }
