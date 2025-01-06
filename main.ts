@@ -32,15 +32,15 @@ export default class Readsidian extends Plugin {
 
 
 		this.addCommand({
-			id: 'readsidian-try-template',
-			name: 'Test reaadsidian template',
+			id: 'import-to-template',
+			name: 'Import Goodreads books using template',
 			callback: () => {
-				this.createNoteFromTemplate();
+				this.fetchBooks();
 			}
 		});
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new ReadsidianSettingTab(this.app, this));
 
 		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
 		// Using this function will automatically remove the event listener when this plugin is disabled.
@@ -66,32 +66,71 @@ export default class Readsidian extends Plugin {
 
 	async fetchBooks(){
 
-		//new Notice('Import from user ID: ' + this.settings.goodReadsUserID);
 		new Notice('Import from GoodReads shelf: ' + this.settings.bookshelf);
 
 		const url = 'https://www.goodreads.com/review/list_rss/'+ this.settings.goodReadsUserID + '?shelf='+this.settings.bookshelf;
 
 		const feed = await goodReadsParser.parseURL(url);
 
-		feed.items.forEach((item : any)=> {
-			console.log(item.book_id);
+		const localBooks = await this.listBookIDs();
 
-			const properties = {
-				type : "goodReadsBook", 
-				bookID : item.book_id,
-				author : "\"[[" + item.author_name +"]]\""}
-			const title = item.title.replace(/[:\/\\]/g, ''); // Replace illegal chars with blank
-			
-		  this.createCustomNote(title, properties, "Testing")
+		const templateContent = await this.getTemplateContent()
+
+		const folderPath = this.settings.readsidianDirectory;
+
+		feed.items.forEach(async (item : any) => {
+			console.log(item.book_id);
+			if (!localBooks.includes(item.book_id)) {
+				console.log(item.book_id);
+
+				//Crete the note
+				const title = item.title.replace(/[:\/\\]/g, ''); // Replace illegal chars with blank
+				const fileName = `${title}.md`; // The note's title
+				const filePath = `${folderPath}/${fileName}`;
+
+				// Do not overwrite existing notes
+        if (this.app.vault.getAbstractFileByPath(filePath)) {
+            new Notice(`Note with title "${title}" already exists at ${filePath}`);
+            return;
+        }
+				
+				if (templateContent) {
+					const renderedContent = nunjucks.renderString(templateContent, item);
+					await this.app.vault.create(filePath, renderedContent);
+					new Notice(`Note created at ${filePath}`);
+				} else {
+					new Notice("Template content is undefined");
+				}
+
+			}
 
 		});
 
 	}
 
 
-  async createNoteFromTemplate() {
-    const templatePath = this.settings.templateNote; // Adjust the path
-    const outputPath = `./Note_testing.md`;
+	// Helper Functions
+
+	async listBookIDs() {
+		const folderPath = this.settings.readsidianDirectory;
+		const files = await this.app.vault.getMarkdownFiles();
+		const bookIDs: string[] = [];
+
+		for (const file of files) {
+			if (file.path.startsWith(folderPath)) {
+				const content = await this.app.vault.read(file);
+				const match = content.match(/bookID:\s*(\d+)/);
+				if (match) {
+					bookIDs.push(match[1]);
+				}
+			}
+		}
+
+		return bookIDs;
+	}
+
+	async getTemplateContent() {
+		const templatePath = this.settings.templateNote;
 
     const templateFile = this.app.vault.getAbstractFileByPath(templatePath) as TFile;
     if (!templateFile) {
@@ -101,76 +140,13 @@ export default class Readsidian extends Plugin {
 
     const templateContent = await this.app.vault.read(templateFile);
 
-    // Data to inject
-    const context = { date: new Date().toLocaleDateString(), title: "Dynamic Note" };
-
-    const renderedContent = nunjucks.renderString(templateContent, context);
-
-		new Notice("rendered content. Out : " + outputPath);
-
-    await this.app.vault.create(outputPath, renderedContent);
-    new Notice(`Note created at ${outputPath}`);
-  }
-
-	async createCustomNote(title : string , attributes : any, content : string) {
-			const fileName = `${title}.md`; // The note's title
-			const folderPath = this.settings.readsidianDirectory; // Specify a folder, or use "" for root
-			const filePath = `${folderPath}/${fileName}`;
-		
-			// Construct the note content with attributes in YAML front matter
-			const frontMatter = 
-`---
-${Object.entries(attributes)
-.map(([key, value]) => `${key}: ${value}`)
-.join("\n")}
----
-
-${content}`;
-		
-			// Create the note
-			const existingFiles = await this.app.vault.getMarkdownFiles();
-			let noteExists = false;
-
-			for (const file of existingFiles) {
-				const content = await this.app.vault.read(file);
-				if (content.includes(`bookID: ${(attributes as any).bookID}`)) {
-					noteExists = true;
-					break;
-				}
-			}
-
-			if (!noteExists) {
-				try {
-					await this.app.vault.create(filePath, frontMatter);
-					new Notice(`Note "${title}" created successfully!`);
-				} catch (error) {
-					console.error(`Error creating note "${title}`, error);
-					new Notice("Failed to create the note. Check the console for details.");
-				}
-			}
-		}
+		return templateContent;
+	}
 
 }
 
 
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
+class ReadsidianSettingTab extends PluginSettingTab {
 	plugin: Readsidian;
 
 	constructor(app: App, plugin: Readsidian) {
@@ -221,13 +197,12 @@ class SampleSettingTab extends PluginSettingTab {
 				.setName('New book template')
 				.setDesc('Set the template for the new book notes')
 				.addText(text => text
-					.setPlaceholder('TemplatesDirectory/Template Note.md')
+					.setPlaceholder('Templates/Readsidian Template.md')
 					.setValue(this.plugin.settings.templateNote)
 					.onChange(async (value) => {
 						this.plugin.settings.templateNote = value;
 						await this.plugin.saveSettings();
 					}));
-
-				
+		
 }
 }
