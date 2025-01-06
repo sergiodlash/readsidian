@@ -1,7 +1,7 @@
 {
 	"id": "readsidian",
 	"name": "Readsidian",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"minAppVersion": "0.15.0",
 	"description": "This plugin can be used to sync book information from GoodReads to your Obsidian Vault. Currently under development",
 	"author": "Sergio de las Heras",
