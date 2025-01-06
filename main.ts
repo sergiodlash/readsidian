@@ -1,5 +1,6 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { goodReadsParser } from './goodreads-rss-parser'
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
+import { goodReadsParser } from './goodreads-rss-parser';
+import nunjucks from 'nunjucks';
 
 // Remember to rename these classes and interfaces!
 
@@ -7,12 +8,14 @@ interface ReadsidianSettings {
 	goodReadsUserID: string;
 	bookshelf: string;
 	readsidianDirectory : string;
+	templateNote : string;
 }
 
 const DEFAULT_SETTINGS: ReadsidianSettings = {
 	goodReadsUserID: '',
 	bookshelf: 'read',
-	readsidianDirectory: ''
+	readsidianDirectory: '',
+	templateNote: ''
 }	
 
 export default class Readsidian extends Plugin {
@@ -27,40 +30,12 @@ export default class Readsidian extends Plugin {
 		});	
 		ribbonIconEl.addClass('readsidian-ribbon-class');
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
+		this.addCommand({
+			id: 'readsidian-try-template',
+			name: 'Test reaadsidian template',
+			callback: () => {
+				this.createNoteFromTemplate();
 			}
 		});
 
@@ -91,7 +66,7 @@ export default class Readsidian extends Plugin {
 
 	async fetchBooks(){
 
-		new Notice('Import from user ID: ' + this.settings.goodReadsUserID);
+		//new Notice('Import from user ID: ' + this.settings.goodReadsUserID);
 		new Notice('Import from GoodReads shelf: ' + this.settings.bookshelf);
 
 		const url = 'https://www.goodreads.com/review/list_rss/'+ this.settings.goodReadsUserID + '?shelf='+this.settings.bookshelf;
@@ -105,7 +80,7 @@ export default class Readsidian extends Plugin {
 				type : "goodReadsBook", 
 				bookID : item.book_id,
 				author : "\"[[" + item.author_name +"]]\""}
-			const title = item.title.replace(/[:\/\\]/g, ' '); // Replace illegal chars with blank
+			const title = item.title.replace(/[:\/\\]/g, ''); // Replace illegal chars with blank
 			
 		  this.createCustomNote(title, properties, "Testing")
 
@@ -113,7 +88,31 @@ export default class Readsidian extends Plugin {
 
 	}
 
-	async createCustomNote(title : string , attributes : object, content : string) {
+
+  async createNoteFromTemplate() {
+    const templatePath = this.settings.templateNote; // Adjust the path
+    const outputPath = `./Note_testing.md`;
+
+    const templateFile = this.app.vault.getAbstractFileByPath(templatePath) as TFile;
+    if (!templateFile) {
+      new Notice("Template file not found");
+      return;
+    }
+
+    const templateContent = await this.app.vault.read(templateFile);
+
+    // Data to inject
+    const context = { date: new Date().toLocaleDateString(), title: "Dynamic Note" };
+
+    const renderedContent = nunjucks.renderString(templateContent, context);
+
+		new Notice("rendered content. Out : " + outputPath);
+
+    await this.app.vault.create(outputPath, renderedContent);
+    new Notice(`Note created at ${outputPath}`);
+  }
+
+	async createCustomNote(title : string , attributes : any, content : string) {
 			const fileName = `${title}.md`; // The note's title
 			const folderPath = this.settings.readsidianDirectory; // Specify a folder, or use "" for root
 			const filePath = `${folderPath}/${fileName}`;
@@ -129,12 +128,25 @@ ${Object.entries(attributes)
 ${content}`;
 		
 			// Create the note
-			try {
-				await this.app.vault.create(filePath, frontMatter);
-				new Notice(`Note "${title}" created successfully!`);
-			} catch (error) {
-				console.error(`Error creating note "${title}`, error);
-				new Notice("Failed to create the note. Check the console for details.");
+			const existingFiles = await this.app.vault.getMarkdownFiles();
+			let noteExists = false;
+
+			for (const file of existingFiles) {
+				const content = await this.app.vault.read(file);
+				if (content.includes(`bookID: ${(attributes as any).bookID}`)) {
+					noteExists = true;
+					break;
+				}
+			}
+
+			if (!noteExists) {
+				try {
+					await this.app.vault.create(filePath, frontMatter);
+					new Notice(`Note "${title}" created successfully!`);
+				} catch (error) {
+					console.error(`Error creating note "${title}`, error);
+					new Notice("Failed to create the note. Check the console for details.");
+				}
 			}
 		}
 
@@ -195,7 +207,7 @@ class SampleSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('Notes directory')
-				.setDesc('In which directory in your vault should the book notes be created?')
+				.setDesc('In which directory in your vault should the book notes be?')
 				.addText(text => text
 					.setPlaceholder('myBooks')
 				.setValue(this.plugin.settings.readsidianDirectory)
@@ -203,6 +215,18 @@ class SampleSettingTab extends PluginSettingTab {
 					this.plugin.settings.readsidianDirectory = value;
 					await this.plugin.saveSettings();
 			}));
+
+			
+			new Setting(containerEl)
+				.setName('New book template')
+				.setDesc('Set the template for the new book notes')
+				.addText(text => text
+					.setPlaceholder('TemplatesDirectory/Template Note.md')
+					.setValue(this.plugin.settings.templateNote)
+					.onChange(async (value) => {
+						this.plugin.settings.templateNote = value;
+						await this.plugin.saveSettings();
+					}));
 
 				
 }
