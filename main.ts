@@ -1,14 +1,11 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian';
-import { goodReadsParser } from './goodreads-rss-parser';
-import nunjucks from 'nunjucks';
-
-// Remember to rename these classes and interfaces!
+import { App, Notice, Plugin, PluginSettingTab, Setting, TFile } from 'obsidian'
+import { goodReadsParser } from './goodreads-rss-parser'
 
 interface ReadsidianSettings {
-	goodReadsUserID: string;
-	bookshelf: string;
-	readsidianDirectory : string;
-	templateNote : string;
+	goodReadsUserID: string
+	bookshelf: string
+	readsidianDirectory: string
+	templateNote: string
 }
 
 const DEFAULT_SETTINGS: ReadsidianSettings = {
@@ -16,31 +13,33 @@ const DEFAULT_SETTINGS: ReadsidianSettings = {
 	bookshelf: 'read',
 	readsidianDirectory: '',
 	templateNote: ''
-}	
+}
 
 export default class Readsidian extends Plugin {
-	settings: ReadsidianSettings;
+	settings: ReadsidianSettings
 
-	async onload() {
+	async onload () {
+		await this.loadSettings()
 
-		await this.loadSettings();
-
-		const ribbonIconEl = this.addRibbonIcon('book', 'Readsidian', (evt: MouseEvent) => {
-			this.fetchBooks()
-		});	
-		ribbonIconEl.addClass('readsidian-ribbon-class');
-
+		const ribbonIconEl = this.addRibbonIcon(
+			'book',
+			'Readsidian',
+			(evt: MouseEvent) => {
+				this.fetchBooks()
+			}
+		)
+		ribbonIconEl.addClass('readsidian-ribbon-class')
 
 		this.addCommand({
 			id: 'import-to-template',
 			name: 'Import Goodreads books using template',
 			callback: () => {
-				this.fetchBooks();
+				this.fetchBooks()
 			}
-		});
+		})
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new ReadsidianSettingTab(this.app, this));
+		this.addSettingTab(new ReadsidianSettingTab(this.app, this))
 
 		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
 		// Using this function will automatically remove the event listener when this plugin is disabled.
@@ -52,157 +51,209 @@ export default class Readsidian extends Plugin {
 		//this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
-	onunload() {
+	onunload () {}
 
+	async loadSettings () {
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData()
+		)
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	async saveSettings () {
+		await this.saveData(this.settings)
 	}
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
+	async fetchBooks () {
+		new Notice('Import from GoodReads shelf: ' + this.settings.bookshelf)
 
-	async fetchBooks(){
+		try {
+			const url =
+				'https://www.goodreads.com/review/list_rss/' +
+				this.settings.goodReadsUserID +
+				'?shelf=' +
+				this.settings.bookshelf
 
-		new Notice('Import from GoodReads shelf: ' + this.settings.bookshelf);
+			const feed = await goodReadsParser.parseURL(url)
 
-		const url = 'https://www.goodreads.com/review/list_rss/'+ this.settings.goodReadsUserID + '?shelf='+this.settings.bookshelf;
+			const localBooks = await this.listBookIDs()
 
-		const feed = await goodReadsParser.parseURL(url);
+			const templateContent = await this.getTemplateContent()
 
-		const localBooks = await this.listBookIDs();
+			const folderPath = this.settings.readsidianDirectory.replace(
+				/\/+$/,
+				''
+			)
 
-		const templateContent = await this.getTemplateContent()
+			for (const item of feed.items) {
+				if (!localBooks.includes(item.book_id)) {
+					// Create the note
+					const title = item.title.replace(/[:\/\\]/g, '') // Replace illegal chars with blank
+					const fileName = `${title}.md`
+					const filePath = `${folderPath}/${fileName}`
 
-		const folderPath = this.settings.readsidianDirectory;
+					// Do not overwrite existing notes
+					if (this.app.vault.getAbstractFileByPath(filePath)) {
+						new Notice(
+							`Note with title "${title}" already exists at ${filePath}`
+						)
+						continue
+					}
 
-		feed.items.forEach(async (item : any) => {
-			console.log(item.book_id);
-			if (!localBooks.includes(item.book_id)) {
-				console.log(item.book_id);
-
-				//Crete the note
-				const title = item.title.replace(/[:\/\\]/g, ''); // Replace illegal chars with blank
-				const fileName = `${title}.md`; // The note's title
-				const filePath = `${folderPath}/${fileName}`;
-
-				// Do not overwrite existing notes
-        if (this.app.vault.getAbstractFileByPath(filePath)) {
-            new Notice(`Note with title "${title}" already exists at ${filePath}`);
-            return;
-        }
-				
-				if (templateContent) {
-					const renderedContent = nunjucks.renderString(templateContent, item);
-					await this.app.vault.create(filePath, renderedContent);
-					new Notice(`Note created at ${filePath}`);
-				} else {
-					new Notice("Template content is undefined");
+					if (templateContent) {
+						const templateData: Record<string, unknown> = {
+							...item,
+							book_description: this.htmlToMarkdown(
+								item.book_description
+							).replace(/\n/g, '\n> '),
+							user_review: this.htmlToMarkdown(item.user_review)
+						}
+						const renderedContent = templateContent.replace(
+							/\{\{\s*(\w+)\s*\}\}/g,
+							(_, key) => String(templateData[key] ?? '')
+						)
+						await this.app.vault.create(filePath, renderedContent)
+						new Notice(`Note created at ${filePath}`)
+					} else {
+						new Notice('Template content is undefined')
+					}
 				}
-
 			}
-
-		});
-
+		} catch (error) {
+			console.error('Readsidian: fetchBooks failed', error)
+			new Notice(
+				`Readsidian error fetching books: ${
+					error instanceof Error ? error.message : String(error)
+				}`
+			)
+		}
 	}
 
+	// Small utility function to correct issues from the html data fields in obsidian markdown syntax
+	htmlToMarkdown (html: string): string {
+		if (!html) return ''
+		return html
+			.replace(/<i>/gi, '*') // opening <i> to italic
+			.replace(/<\/i>/gi, '*') // closing </i> to italic
+			.replace(/<br\s*\/?>/gi, ' \n ') // <br> tags to line break
+			.replace(/\n{3,}/g, '\n\n ') // collapse 3+ newlines to 2
+			.trim()
+	}
 
 	// Helper Functions
 
-	async listBookIDs() {
-		const folderPath = this.settings.readsidianDirectory;
-		const files = await this.app.vault.getMarkdownFiles();
-		const bookIDs: string[] = [];
+	async listBookIDs () {
+		const folderPath = this.settings.readsidianDirectory
+		const files = await this.app.vault.getMarkdownFiles()
+		const bookIDs: string[] = []
 
 		for (const file of files) {
 			if (file.path.startsWith(folderPath)) {
-				const content = await this.app.vault.read(file);
-				const match = content.match(/bookID:\s*(\d+)/);
+				const content = await this.app.vault.read(file)
+				const match = content.match(/bookID:\s*(\d+)/)
 				if (match) {
-					bookIDs.push(match[1]);
+					bookIDs.push(match[1])
 				}
 			}
 		}
 
-		return bookIDs;
+		return bookIDs
 	}
 
-	async getTemplateContent() {
-		const templatePath = this.settings.templateNote;
+	async getTemplateContent () {
+		let templatePath = this.settings.templateNote
 
-    const templateFile = this.app.vault.getAbstractFileByPath(templatePath) as TFile;
-    if (!templateFile) {
-      new Notice("Template file not found");
-      return;
-    }
+		if (!templatePath) {
+			new Notice(
+				'Readsidian: No template path set. Please configure it in settings.'
+			)
+			return
+		}
 
-    const templateContent = await this.app.vault.read(templateFile);
+		// Make sure it ends with .md
+		if (!templatePath.endsWith('.md')) {
+			templatePath = templatePath + '.md'
+		}
+		const templateFile = this.app.vault.getAbstractFileByPath(
+			templatePath
+		) as TFile
+		if (!templateFile) {
+			new Notice('Template file not found')
+			return
+		}
 
-		return templateContent;
+		const templateContent = await this.app.vault.read(templateFile)
+
+		return templateContent
 	}
-
 }
 
-
 class ReadsidianSettingTab extends PluginSettingTab {
-	plugin: Readsidian;
+	plugin: Readsidian
 
-	constructor(app: App, plugin: Readsidian) {
-		super(app, plugin);
-		this.plugin = plugin;
+	constructor (app: App, plugin: Readsidian) {
+		super(app, plugin)
+		this.plugin = plugin
 	}
 
-	display(): void {
-		const {containerEl} = this;
+	display (): void {
+		const { containerEl } = this
 
-		containerEl.empty();
+		containerEl.empty()
 
 		new Setting(containerEl)
 			.setName('GoodReads User ID')
 			.setDesc('Type your GoodReads user ID.')
-			.addText(text => text
-			.setPlaceholder('12356-your-user')
-			.setValue(this.plugin.settings.goodReadsUserID)
-			.onChange(async (value) => {
-				this.plugin.settings.goodReadsUserID = value;
-				await this.plugin.saveSettings();
-			}));
+			.addText(text =>
+				text
+					.setPlaceholder('12356-your-user')
+					.setValue(this.plugin.settings.goodReadsUserID)
+					.onChange(async value => {
+						this.plugin.settings.goodReadsUserID = value
+						await this.plugin.saveSettings()
+					})
+			)
 
-			new Setting(containerEl)
-				.setName('Bookshelf')
-				.setDesc('GoodReads shelf to get the books from')
-				.addText(text => text
+		new Setting(containerEl)
+			.setName('Bookshelf')
+			.setDesc('GoodReads shelf to get the books from')
+			.addText(text =>
+				text
 					.setPlaceholder('read')
-				.setValue(this.plugin.settings.bookshelf)
-				.onChange(async (value) => {
-					this.plugin.settings.bookshelf = value;
-					await this.plugin.saveSettings();
-				}));
+					.setValue(this.plugin.settings.bookshelf)
+					.onChange(async value => {
+						this.plugin.settings.bookshelf = value
+						await this.plugin.saveSettings()
+					})
+			)
 
-			new Setting(containerEl)
-				.setName('Notes directory')
-				.setDesc('In which directory in your vault should the book notes be?')
-				.addText(text => text
+		new Setting(containerEl)
+			.setName('Notes directory')
+			.setDesc(
+				'In which directory in your vault should the book notes be created?'
+			)
+			.addText(text =>
+				text
 					.setPlaceholder('myBooks')
-				.setValue(this.plugin.settings.readsidianDirectory)
-				.onChange(async (value) => {
-					this.plugin.settings.readsidianDirectory = value;
-					await this.plugin.saveSettings();
-			}));
+					.setValue(this.plugin.settings.readsidianDirectory)
+					.onChange(async value => {
+						this.plugin.settings.readsidianDirectory = value
+						await this.plugin.saveSettings()
+					})
+			)
 
-			
-			new Setting(containerEl)
-				.setName('New book template')
-				.setDesc('Set the template for the new book notes')
-				.addText(text => text
-					.setPlaceholder('Templates/Readsidian Template.md')
+		new Setting(containerEl)
+			.setName('New book template')
+			.setDesc('Set the template for the new book notes')
+			.addText(text =>
+				text
+					.setPlaceholder('Temps/ReadsidianTemplate.md')
 					.setValue(this.plugin.settings.templateNote)
-					.onChange(async (value) => {
-						this.plugin.settings.templateNote = value;
-						await this.plugin.saveSettings();
-					}));
-		
-}
+					.onChange(async value => {
+						this.plugin.settings.templateNote = value
+						await this.plugin.saveSettings()
+					})
+			)
+	}
 }
